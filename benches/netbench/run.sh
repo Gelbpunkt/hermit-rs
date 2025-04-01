@@ -8,32 +8,47 @@ set -o errexit
 
 netbench_dir="${0%/*}"
 root_dir="$netbench_dir"/../..
-rusty_loader_dir="$root_dir"/../rusty-loader
+loader_dir="$root_dir"/../loader
 
 bin=$2
-args="--bytes 1048576 --rounds 1000"
+args="--bytes 1048576 --rounds 5000"
 
 hermit() {
-    echo "Building rusty-loader"
+    echo "Building loader"
 
-    pushd loader
-    cargo xtask build --arch x86_64 --release
+    pushd $loader_dir
+    cargo xtask build --target x86_64 --release
     popd
 
     echo "Building $bin image"
 
-    cargo build --manifest-path "$netbench_dir"/Cargo.toml --bin $bin \
-        --release
+    HERMIT_LOG_LEVEL_FILTER=Trace cargo build --manifest-path "$netbench_dir"/Cargo.toml --bin $bin \
+        --release --target x86_64-unknown-hermit
 
     echo "Launching $bin image on QEMU"
 
-    qemu-system-x86_64 -cpu host \
+    mkdir -p tracedir
+    sudo /usr/libexec/virtiofsd --socket-path=/tmp/vhostqemu --shared-dir=$(pwd)/tracedir --announce-submounts --sandbox none --seccomp none --inode-file-handles=never &
+    sleep 1
+    sudo chmod 777 /tmp/vhostqemu
+
+    sudo qemu-system-x86_64 -cpu host,migratable=no,+invtsc,enforce \
+            -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
             -enable-kvm -display none -smp 1 -m 1G -serial stdio \
-            -kernel "$rusty_loader_dir"/target/x86_64/release/rusty-loader \
+            -kernel "$loader_dir"/target/release/hermit-loader-x86_64 \
             -initrd "$root_dir"/target/x86_64-unknown-hermit/release/$bin \
-            -netdev tap,id=net0,ifname=tap10,script=no,downscript=no,vhost=on \
-            -device virtio-net-pci,netdev=net0,disable-legacy=on \
-            -append "-- --nonblocking 0 --address 10.0.5.1 $args"
+            -netdev user,id=u1,hostfwd=tcp::7878-:7878,hostfwd=udp::7878-:7878,net=192.168.76.0/24,dhcpstart=192.168.76.9 \
+            -device virtio-net-pci,netdev=u1,disable-legacy=on,packed=on,mq=on \
+            -chardev socket,id=char0,path=/tmp/vhostqemu \
+            -device vhost-user-fs-pci,queue-size=1024,packed=on,chardev=char0,tag=tracedir \
+            -object memory-backend-file,id=mem,size=1G,mem-path=/dev/shm,share=on \
+            -numa node,memdev=mem \
+            -append "-- --address 0.0.0.0 $args"
+
+    nm -n "$root_dir"/target/x86_64-unknown-hermit/release/$bin > tracedir/tcp-bw-server.sym
+    uftrace dump -d tracedir --flame-graph > tracedir/flamegraph.txt
+    flamegraph.pl tracedir/flamegraph.txt > tracedir/flamegraph.svg
+    firefox tracedir/flamegraph.svg
 }
 
 linux() {
@@ -43,7 +58,7 @@ linux() {
         --release \
         --target x86_64-unknown-linux-gnu \
         -- \
-        --nonblocking 0 --address 10.0.5.3 $args
+        --address 127.0.0.1 $args
 }
 
 $1

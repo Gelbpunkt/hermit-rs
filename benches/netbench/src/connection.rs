@@ -63,9 +63,9 @@ pub fn close_connection(stream: &TcpStream) {
 /// Starts listening on given port and return first connection to that port as a stream.
 pub fn server_listen_and_get_first_connection(port: &str) -> TcpStream {
 	let listener = TcpListener::bind("0.0.0.0:".to_owned() + port).unwrap();
-	println!("Server running, listening for connection on 0.0.0.0:{port}");
+	log::info!("Server running, listening for connection on 0.0.0.0:{port}");
 	let stream = listener.incoming().next().unwrap().unwrap();
-	println!(
+	log::info!(
 		"Connection established with {:?}!",
 		stream.peer_addr().unwrap()
 	);
