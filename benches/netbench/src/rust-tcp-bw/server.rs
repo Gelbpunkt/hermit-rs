@@ -2,10 +2,14 @@ use std::io::{ErrorKind, Read};
 use std::net::TcpStream;
 use std::time::Instant;
 
+#[cfg(feature = "rftrace")]
+extern crate rftrace as _;
 use clap::Parser;
 #[cfg(target_os = "hermit")]
 use hermit as _;
 use hermit_bench_output::log_benchmark_data;
+#[cfg(feature = "rftrace")]
+use rftrace_frontend as rftrace;
 use rust_tcp_io_perf::config::Config;
 use rust_tcp_io_perf::print_utils::BoxplotValues;
 use rust_tcp_io_perf::{connection, threading};
@@ -53,6 +57,9 @@ fn receive_rounds(
 }
 
 fn main() {
+	#[cfg(feature = "rftrace")]
+	let events = rftrace::init(100000, false);
+
 	let args = Config::parse();
 
 	println!(
@@ -63,8 +70,14 @@ fn main() {
 	connection::setup(&args, &stream);
 	threading::setup(&args);
 
+	#[cfg(feature = "rftrace")]
+	rftrace::enable();
+
 	let _ = receive_rounds(&mut stream, args.warmup, args.n_bytes, false);
 	let durations = receive_rounds(&mut stream, args.n_rounds, args.n_bytes, true);
+
+	#[cfg(feature = "rftrace")]
+	rftrace::disable();
 
 	let statistics = BoxplotValues::<f64>::from(durations.as_slice());
 	log_benchmark_data("TCP server", "Mbit/s", statistics.mean);
@@ -77,4 +90,7 @@ fn main() {
 	);
 
 	connection::close_connection(&stream);
+
+	#[cfg(feature = "rftrace")]
+	rftrace::dump_full_uftrace(events, "/tracedir", "tcp-server-bw").unwrap();
 }
